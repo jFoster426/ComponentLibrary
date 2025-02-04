@@ -1,0 +1,1 @@
+javac -cp .;lib/commons-csv-1.12.0.jar;lib/commons-io-2.18.0.jar;lib/commons-codec-1.17.2.jar -Xlint:deprecation CSVGuiApp.java
