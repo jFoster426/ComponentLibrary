@@ -56,6 +56,9 @@ public class CSVGuiApp {
         frame.add(new JScrollPane(table), BorderLayout.CENTER);
         table.getSelectionModel().addListSelectionListener(e -> updateTextFields(e));
 
+        // Disable table auto-editing, makes Ctrl+U work correctly
+        table.putClientProperty("JTable.autoStartsEdit", Boolean.FALSE);
+
         // Search panel
         JPanel searchPanel = new JPanel(new BorderLayout());
         searchField = new JTextField();
@@ -108,6 +111,8 @@ public class CSVGuiApp {
         menuBar.add(fileMenu);
         frame.setJMenuBar(menuBar);
 
+        // ******************************************************************************************
+
         // Create the action for Ctrl+O
         Action openAction = new AbstractAction() {
             @Override
@@ -124,6 +129,10 @@ public class CSVGuiApp {
         inputMap1.put(KeyStroke.getKeyStroke(KeyEvent.VK_O, KeyEvent.CTRL_DOWN_MASK), ctrlO);
         actionMap1.put(ctrlO, openAction);
 
+        // ******************************************************************************************
+
+        // ******************************************************************************************
+
         // Create the action for Ctrl+S
         Action saveAction = new AbstractAction() {
             @Override
@@ -139,6 +148,50 @@ public class CSVGuiApp {
         // Bind the action to Ctrl+S
         inputMap2.put(KeyStroke.getKeyStroke(KeyEvent.VK_S, KeyEvent.CTRL_DOWN_MASK), ctrlS);
         actionMap2.put(ctrlS, saveAction);
+
+        // ******************************************************************************************
+
+        // ******************************************************************************************
+
+        // Create the action for Ctrl+Q
+        Action addRowAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                // This is the subroutine that will run when Ctrl+Q is pressed
+                addRow();
+            }
+        };
+        // Map Ctrl+Q to the saveAction
+        String ctrlQ = "ctrl Q";  // Key stroke for Ctrl+Q
+        InputMap inputMap3 = frame.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap actionMap3 = frame.getRootPane().getActionMap();
+        // Bind the action to Ctrl+Q
+        inputMap3.put(KeyStroke.getKeyStroke(KeyEvent.VK_Q, KeyEvent.CTRL_DOWN_MASK), ctrlQ);
+        actionMap3.put(ctrlQ, addRowAction);
+
+        // ******************************************************************************************
+
+        // ******************************************************************************************
+
+        // Create the action for Ctrl+U
+        Action updateRowAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                // This is the subroutine that will run when Ctrl+U is pressed
+                updateRow();
+            }
+        };
+        // Map Ctrl+U to the saveAction
+        String ctrlU = "ctrl U";  // Key stroke for Ctrl+U
+        InputMap inputMap4 = frame.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap actionMap4 = frame.getRootPane().getActionMap();
+        // Bind the action to Ctrl+U
+        inputMap4.put(KeyStroke.getKeyStroke(KeyEvent.VK_U, KeyEvent.CTRL_DOWN_MASK), ctrlU);
+        actionMap4.put(ctrlU, updateRowAction);
+
+        // ******************************************************************************************
+
+
 
         // Action listeners
         openItem.addActionListener(e -> openCSV());
@@ -188,13 +241,28 @@ public class CSVGuiApp {
         }
     }
 
+    // private boolean openCSV() {
+    //     JFileChooser fileChooser = new JFileChooser();
+    //     if (fileChooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
+    //         File file = fileChooser.getSelectedFile();
+    //         return openCSV(file);
+    //     }
+    //     return false;
+    // }
+
     private boolean openCSV() {
-        JFileChooser fileChooser = new JFileChooser();
-        if (fileChooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
-            File file = fileChooser.getSelectedFile();
-            return openCSV(file);
+        FileDialog dialog = new FileDialog(frame, "Open CSV", FileDialog.LOAD);
+        dialog.setVisible(true);
+
+        String directory = dialog.getDirectory();
+        String filename  = dialog.getFile();
+
+        if (directory == null || filename == null) {
+            return false; // user cancelled
         }
-        return false;
+
+        File file = new File(directory, filename);
+        return openCSV(file);
     }
 
     private boolean openCSV(String fileName) {
@@ -308,12 +376,19 @@ public class CSVGuiApp {
 
 
     private void searchDatabase() {
-        String searchText = searchField.getText().toLowerCase();
+        String searchText[] = searchField.getText().toLowerCase().split("[*]");
 
         // Create a RowFilter to match rows based on searchText
         RowFilter<DefaultTableModel, Integer> filter = new RowFilter<DefaultTableModel, Integer>() {
             @Override
             public boolean include(Entry<? extends DefaultTableModel, ? extends Integer> entry) {
+                // Special case for if searchText is empty
+                if (searchText[0] == "") {
+                    return true;
+                }
+
+                boolean searchTextFound[] = new boolean[searchText.length];
+
                 for (int i = 0; i < tableModel.getColumnCount(); i++) {
                     String cellValue = "";
                     try {
@@ -321,11 +396,20 @@ public class CSVGuiApp {
                     } catch (Exception e) {
                         // Ignore empty or null cells
                     }
-                    if (cellValue.contains(searchText)) {
-                        return true; // Show the row if it matches
+                    
+                    for (int j = 0; j < searchText.length; j++) {
+                        if (cellValue.contains(searchText[j])) {
+                            searchTextFound[j] = true;
+                        }
                     }
                 }
-                return false; // Hide the row if no match is found
+
+                for (int i = 0; i < searchText.length; i++)
+                {
+                    if (searchTextFound[i] == false)
+                        return false;  // Hide the row if any of the matches were not found in any of the columns
+                }
+                return true; // Show the row as default
             }
         };
 
@@ -336,9 +420,18 @@ public class CSVGuiApp {
     }
 
     private void addRow() {
+        addRow(false);
+    }
+
+    private void duplicateRow() {
+        addRow(true);
+    }
+
+    private void addRow(boolean duplicate) {
         String[] rowData = new String[columnNames.length];
         for (int i = 0; i < columnNames.length; i++) {
-            rowData[i] = ""; // inputFields[i].getText();
+            if (duplicate == false) rowData[i] = "";
+            else                    rowData[i] = inputFields[i].getText();
         }
         tableModel.addRow(rowData);
         
