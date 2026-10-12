@@ -39,12 +39,15 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QPoint,
     QSortFilterProxyModel,
     QStringListModel,
     Qt,
     QTimer,
+    QUrl,
+    Signal,
 )
-from PySide6.QtGui import QAction, QKeyEvent
+from PySide6.QtGui import QAction, QDesktopServices, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -56,6 +59,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -160,6 +164,33 @@ COMPLETION_FILTER_MODE: Final[Qt.MatchFlag] = Qt.MatchFlag.MatchContains
 COMPLETION_MODE: Final[QCompleter.CompletionMode] = QCompleter.CompletionMode.PopupCompletion
 COMPLETION_MAX_VISIBLE_ITEMS: Final[int] = 15
 LOG_COMPLETION_DIR_MISSING: Final[str] = "Autocomplete directory not found: {path}"
+
+# --- Opening symbol / footprint files (via the OS default application) ------------
+OPEN_FILE_LABEL_CURSOR: Final[Qt.CursorShape] = Qt.CursorShape.PointingHandCursor
+OPEN_FILE_LABEL_TOOLTIP: Final[str] = "Click to open the matching file in {directory}"
+OPEN_FILE_FIELD_TOOLTIP: Final[str] = "Right-click to open the matching file in {directory}"
+MENU_OPEN_FILE: Final[str] = "Open {name}"
+MENU_OPEN_EMPTY: Final[str] = "Open file: enter a {column} first"
+MENU_OPEN_NO_MATCH: Final[str] = "Open file: no '{reference}' in {directory}"
+MSG_OPEN_EMPTY: Final[str] = "Enter a {column} first."
+MSG_OPEN_NO_MATCH: Final[str] = "No file named '{reference}' found in {directory}"
+MSG_OPEN_FAILED: Final[str] = "Could not open {path}"
+LINK_LABEL_UNDERLINE: Final[bool] = True  # underlined labels mark fields that open something
+MENU_MNEMONIC_CHAR: Final[str] = "&"  # escaped in menu text so "R&D" isn't shown as "RD"
+
+# --- Opening HelpURL links (via the default browser) --------------------------------
+HELP_URL_COLUMN: Final[str] = "HelpURL"
+HELP_URL_ALLOWED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
+HELP_URL_LOCAL_SUFFIXES: Final[frozenset[str]] = frozenset({".html", ".htm"})  # local help pages
+HELP_URL_LABEL_TOOLTIP: Final[str] = "Click to open the link in your browser"
+HELP_URL_FIELD_TOOLTIP: Final[str] = "Right-click to open the link in your browser"
+MENU_OPEN_LINK: Final[str] = "Open link: {url}"
+MENU_OPEN_LINK_EMPTY: Final[str] = "Open link: enter a {column} first"
+MENU_OPEN_LINK_INVALID: Final[str] = "Open link: not a web or HTML link"
+MENU_LINK_MAX_CHARS: Final[int] = 60
+MENU_ELLIPSIS: Final[str] = "\u2026"
+MSG_OPEN_LINK_INVALID: Final[str] = "Not a web or HTML link: {text}"
+MSG_OPEN_LINK_FAILED: Final[str] = "Could not open {url}"
 # Columns whose suggestions are the distinct values already present in that column.
 COLUMN_VALUE_COMPLETION_COLUMNS: Final[tuple[str, ...]] = ("Manufacturer 1",)
 COMPLETION_REFRESH_DELAY_MS: Final[int] = 0  # coalesce bursts of edits into one rebuild
@@ -265,6 +296,36 @@ def java_io_message(error: OSError) -> str:
     if error.filename is not None and error.strerror:
         return JAVA_IO_ERROR_MESSAGE.format(path=error.filename, reason=error.strerror)
     return str(error)
+
+
+def resolve_help_url(text: str, working_directory: str) -> QUrl | None:
+    """Turn a HelpURL cell into a URL that is safe to hand to the OS, or ``None``.
+
+    Accepts http(s) links (a bare ``www.example.com`` becomes ``http://``) and local
+    ``.html``/``.htm`` files, absolute or relative to ``working_directory``. Every other
+    scheme (``file:`` executables, ``javascript:``, custom protocol handlers, ...) is
+    rejected because the value comes from CSV data, not from the user's own click target.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return None
+    url = QUrl.fromUserInput(stripped, working_directory)
+    if not url.isValid():
+        return None
+    if url.scheme().lower() in HELP_URL_ALLOWED_SCHEMES:
+        return url
+    if url.isLocalFile() and Path(url.toLocalFile()).suffix.lower() in HELP_URL_LOCAL_SUFFIXES:
+        return url
+    return None
+
+
+def menu_text(text: str) -> str:
+    """Escape Qt mnemonic markers so the text shows literally in a menu."""
+    return text.replace(MENU_MNEMONIC_CHAR, MENU_MNEMONIC_CHAR * 2)
+
+
+def elide(text: str, max_chars: int) -> str:
+    return text if len(text) <= max_chars else text[: max_chars - len(MENU_ELLIPSIS)] + MENU_ELLIPSIS
 
 
 # =============================================================================
@@ -805,6 +866,25 @@ class FileNameCompletionSource(CompletionSource):
         }
         self._set_suggestions(names)
 
+    @property
+    def directory(self) -> Path:
+        return self._directory
+
+    def matching_files(self, reference: str) -> list[Path]:
+        """Files whose completion name equals ``reference``: exact matches if any,
+        otherwise case-insensitive ones (Windows file systems ignore case)."""
+        if not self._directory.is_dir():
+            return []
+        files = [entry for entry in self._directory.iterdir() if entry.is_file()]
+
+        def name_of(entry: Path) -> str:
+            return entry.stem if self._use_file_stem else entry.name
+
+        matches = [entry for entry in files if name_of(entry) == reference] or [
+            entry for entry in files if name_of(entry).casefold() == reference.casefold()
+        ]
+        return sorted(matches, key=lambda entry: entry.name.casefold())
+
 
 class ColumnValuesCompletionSource(CompletionSource):
     """Suggests the distinct non-blank values already present in one table column
@@ -836,6 +916,17 @@ class ColumnValuesCompletionSource(CompletionSource):
         self._set_suggestions(
             {value for value in self._table_model.column_values(self._column) if value is not None and value.strip()}
         )
+
+
+class ClickableLabel(QLabel):
+    """QLabel that emits ``clicked`` on a left-button click released over it."""
+
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
 
 class CompletingItemDelegate(QStyledItemDelegate):
@@ -883,6 +974,27 @@ class CsvGuiApp(QMainWindow):
         self._field_snapshot: tuple[str, ...] = self._input_texts()
 
         self._completion_sources = self._build_completion_sources()
+        self._file_sources: dict[int, FileNameCompletionSource] = {
+            column: source
+            for column, source in self._completion_sources.items()
+            if isinstance(source, FileNameCompletionSource)
+        }
+        self._help_url_column: int | None = (
+            self._column_names.index(HELP_URL_COLUMN) if HELP_URL_COLUMN in self._column_names else None
+        )
+        field_tooltips = {
+            column: OPEN_FILE_FIELD_TOOLTIP.format(directory=source.directory)
+            for column, source in self._file_sources.items()
+        }
+        if self._help_url_column is not None:
+            field_tooltips[self._help_url_column] = HELP_URL_FIELD_TOOLTIP
+        for column, tooltip in field_tooltips.items():
+            line_edit = self._input_fields[column]
+            line_edit.setToolTip(tooltip)
+            line_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            line_edit.customContextMenuRequested.connect(
+                lambda position, column=column: self._on_field_context_menu(column, position)
+            )
         self._table.setItemDelegate(CompletingItemDelegate(self._completion_sources, self._table))
 
         self._build_layout()
@@ -939,6 +1051,29 @@ class CsvGuiApp(QMainWindow):
             line_edit.setCompleter(source.create_completer(line_edit))
         return sources
 
+    def _build_input_label(self, column: int) -> QLabel:
+        text = self._column_names[column] + INPUT_LABEL_SUFFIX
+        source = self._file_sources.get(column)
+        if source is not None:
+            label = self._build_link_label(text, OPEN_FILE_LABEL_TOOLTIP.format(directory=source.directory))
+            label.clicked.connect(lambda column=column, label=label: self._on_open_reference(column, label))
+            return label
+        if column == self._help_url_column:
+            label = self._build_link_label(text, HELP_URL_LABEL_TOOLTIP)
+            label.clicked.connect(lambda column=column: self._on_open_help_url(column))
+            return label
+        return QLabel(text)
+
+    @staticmethod
+    def _build_link_label(text: str, tooltip: str) -> ClickableLabel:
+        label = ClickableLabel(text)
+        label.setCursor(OPEN_FILE_LABEL_CURSOR)
+        label.setToolTip(tooltip)
+        font = label.font()
+        font.setUnderline(LINK_LABEL_UNDERLINE)
+        label.setFont(font)
+        return label
+
     def _build_layout(self) -> None:
         search_panel = QHBoxLayout()
         search_panel.setContentsMargins(LAYOUT_MARGIN_PX, LAYOUT_MARGIN_PX, LAYOUT_MARGIN_PX, LAYOUT_MARGIN_PX)
@@ -950,8 +1085,7 @@ class CsvGuiApp(QMainWindow):
         input_panel.setContentsMargins(LAYOUT_MARGIN_PX, LAYOUT_MARGIN_PX, LAYOUT_MARGIN_PX, LAYOUT_MARGIN_PX)
         input_panel.setSpacing(LAYOUT_SPACING_PX)
         cells: list[tuple[QWidget, QWidget]] = [
-            (QLabel(name + INPUT_LABEL_SUFFIX), line_edit)
-            for name, line_edit in zip(self._column_names, self._input_fields, strict=True)
+            (self._build_input_label(column), line_edit) for column, line_edit in enumerate(self._input_fields)
         ]
         cells.append((self._add_button, self._update_button))
         for row, (left, right) in enumerate(cells):
@@ -1015,6 +1149,116 @@ class CsvGuiApp(QMainWindow):
         self.update_text_fields()
 
     # --- helpers -----------------------------------------------------------------------
+    @edt_guard
+    def _on_open_reference(self, column: int, anchor: QWidget) -> None:
+        self.open_reference_file(column, anchor)
+
+    @edt_guard
+    def _on_open_help_url(self, column: int) -> None:
+        self.open_help_url(column)
+
+    @edt_guard
+    def _on_field_context_menu(self, column: int, position: QPoint) -> None:
+        self.show_field_context_menu(column, position)
+
+    # --- opening symbol / footprint files -------------------------------------------------
+    def _reference_text(self, column: int) -> str:
+        return self._input_fields[column].text().strip()
+
+    def _open_file(self, path: Path) -> None:
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))):
+            self._show_message(MSG_OPEN_FAILED.format(path=path))
+
+    def _open_file_action(self, path: Path, parent: QObject) -> QAction:
+        action = QAction(menu_text(MENU_OPEN_FILE.format(name=path.name)), parent)
+        action.triggered.connect(lambda _checked=False, path=path: self._open_file(path))
+        return action
+
+    def open_reference_file(self, column: int, anchor: QWidget) -> None:
+        """Label click: open the file named by the field; let the user pick if several match."""
+        source = self._file_sources[column]
+        reference = self._reference_text(column)
+        if not reference:
+            self._show_message(MSG_OPEN_EMPTY.format(column=self._column_names[column]))
+            return
+        matches = source.matching_files(reference)
+        if not matches:
+            self._show_message(MSG_OPEN_NO_MATCH.format(reference=reference, directory=source.directory))
+            return
+        if len(matches) == 1:
+            self._open_file(matches[0])
+            return
+        menu = QMenu(anchor)
+        for path in matches:
+            menu.addAction(self._open_file_action(path, menu))
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        menu.deleteLater()
+
+    def _reference_menu_actions(self, column: int, parent: QObject) -> list[QAction]:
+        source = self._file_sources[column]
+        reference = self._reference_text(column)
+        if not reference:
+            disabled_text = MENU_OPEN_EMPTY.format(column=self._column_names[column])
+        else:
+            matches = source.matching_files(reference)
+            if matches:
+                return [self._open_file_action(path, parent) for path in matches]
+            disabled_text = MENU_OPEN_NO_MATCH.format(reference=reference, directory=source.directory)
+        return [self._disabled_action(disabled_text, parent)]
+
+    @staticmethod
+    def _disabled_action(text: str, parent: QObject) -> QAction:
+        action = QAction(menu_text(text), parent)
+        action.setEnabled(False)
+        return action
+
+    # --- opening HelpURL links ------------------------------------------------------------
+    def _open_url(self, url: QUrl) -> None:
+        if not QDesktopServices.openUrl(url):
+            self._show_message(MSG_OPEN_LINK_FAILED.format(url=url.toString()))
+
+    def open_help_url(self, column: int) -> None:
+        """Label click: open the HelpURL field's link in the default browser."""
+        text = self._reference_text(column)
+        if not text:
+            self._show_message(MSG_OPEN_EMPTY.format(column=self._column_names[column]))
+            return
+        url = resolve_help_url(text, str(Path.cwd()))
+        if url is None:
+            self._show_message(MSG_OPEN_LINK_INVALID.format(text=text))
+            return
+        self._open_url(url)
+
+    def _help_url_menu_actions(self, column: int, parent: QObject) -> list[QAction]:
+        text = self._reference_text(column)
+        if not text:
+            return [self._disabled_action(MENU_OPEN_LINK_EMPTY.format(column=self._column_names[column]), parent)]
+        url = resolve_help_url(text, str(Path.cwd()))
+        if url is None:
+            return [self._disabled_action(MENU_OPEN_LINK_INVALID, parent)]
+        shown = elide(url.toDisplayString(), MENU_LINK_MAX_CHARS)
+        action = QAction(menu_text(MENU_OPEN_LINK.format(url=shown)), parent)
+        action.triggered.connect(lambda _checked=False, url=url: self._open_url(url))
+        return [action]
+
+    def show_field_context_menu(self, column: int, position: QPoint) -> None:
+        """Right-click on a reference or HelpURL field: the usual edit menu with "Open ..." entries on top."""
+        line_edit = self._input_fields[column]
+        menu = line_edit.createStandardContextMenu()
+        standard_actions = menu.actions()
+        open_actions = (
+            self._help_url_menu_actions(column, menu)
+            if column == self._help_url_column
+            else self._reference_menu_actions(column, menu)
+        )
+        if standard_actions:
+            menu.insertActions(standard_actions[0], open_actions)
+            menu.insertSeparator(standard_actions[0])
+        else:
+            menu.addActions(open_actions)
+        menu.exec(line_edit.mapToGlobal(position))
+        menu.deleteLater()
+
     def _show_message(self, text: str) -> None:
         QMessageBox.information(self, MESSAGE_DIALOG_TITLE, text)
 
