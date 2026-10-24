@@ -467,8 +467,8 @@ L78L05A(UMW),L78L05A(UMW),UMW_PKG_SOT-89-3,Judd Foster,https://www.lcsc.com/data
 "CONN,Hdr,2x8 Pin,1.27mm,SMD","CONN,Hdr,2x8 Pin,1.27mm,SMD",HANXIA_HX PZ1.27-2x8P TP,Judd Foster,https://www.lcsc.com/datasheet/C41376040.pdf?spm=wm.sxq.inf.ggs___wm.fly.bg.0.xh&lcsc_vid=T1ELXwUHQlNYVlZRE1JdXlRQFVgNBF1eTlFXBVxWRAAxVlNeQ1lYVlFUQlNXXjsOAxUeFF5JWBYZEEoKFBINSQcJGk4eFQsCAgIaSgADAwAHC0slRFhZUlVVQ08GEwkK,hanxia,HX PZ1.27-2x8P TP,LCSC,C41376040,CONN HEADER 16POS 1.27mm DUAL ROW SMD,,=Manufacturer 1 Part Number
 "CONN,Rcpt,2x8 Pin,1.27mm,SMD","CONN,Rcpt,2x8 Pin,1.27mm,SMD",HCTL_PM127-2-08-S-4.3,Judd Foster,https://www.lcsc.com/datasheet/C3975134.pdf?spm=wm.sxq.inf.ggs___wm.fly.bg.0.xh&lcsc_vid=T1ELXwUHQlNYVlZRE1JdXlRQFVgNBF1eTlFXBVxWRAAxVlNeQ1lYVldfR1VbXjsOAxUeFF5JWBYZEEoKFBINSQcJGk4dAgUUFAk%3D,HCTL,PM127-2-08-S-4.3,LCSC,C3975134,CONN SOCKET 16POS 1.27mm DUAL ROW SMD,,=Manufacturer 1 Part Number
 "CHOKE,CM,2LN,800nH,300mA","CHOKE,CM,2LN,800nH,300mA",BOURNS_SRF2012,Kevin Heyer,https://www.bourns.com/docs/Product-Datasheets/SRF2012A.pdf,Bourns,SRF2012-501YA,DigiKey,118-SRF2012-501YACT-ND,Choke CM 800nH 300mA,,"800nH,300mA"
-"",,,,,,,,,,,
-"",,,,,,,,,,,
+"CAP,Trim,2-6pF,100V,SMD","CAP,Trim,2-6pF,100V,SMD",EWELECTRONICS_SGC3S,Judd Foster,https://media.digikey.com/pdf/Data%20Sheets/Sprague-Goodman%20PDFs/SGC3S%20Series.pdf,EW Electronics,SGC3S060NM,DigiKey,2447-SGC3S060NMCT-ND,2 ~ 6pF Trimmer Capacitor 100 V Top Surface Mount,,2-6pF
+"CAP,Trim,8-30pF,100V,SMD","CAP,Trim,8-30pF,100V,SMD",EWELECTRONICS_SGC3S,Judd Foster,https://media.digikey.com/pdf/Data%20Sheets/Sprague-Goodman%20PDFs/SGC3S%20Series.pdf,EW Electronics,SGC3S300NM,DigiKey,2447-SGC3S300NMCT-ND,8 ~ 30pF Trimmer Capacitor 100 V Top Surface Mount,,8-30pF
 "",,,,,,,,,,,
 "",,,,,,,,,,,
 "",,,,,,,,,,,
