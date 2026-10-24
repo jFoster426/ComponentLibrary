@@ -11,7 +11,7 @@ Parity notes
 Known defects of the Java original are reproduced on purpose so the port is a
 drop-in replacement; each is marked ``JAVA PARITY`` and listed in the review.
 Deliberate deviations are marked ``FIX`` (Add Row selection; Add Row copies
-modified input fields).
+modified input fields; Excel ``#NAME?`` cells restored on load).
 Uncaught exceptions are printed to stderr and the app keeps running, which is
 what the Swing event-dispatch thread does (PyQt/PySide would otherwise abort).
 
@@ -26,6 +26,7 @@ import math
 import sys
 import traceback
 import unicodedata
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, ParamSpec, TextIO, TypeVar
@@ -71,7 +72,7 @@ from PySide6.QtWidgets import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
     from types import TracebackType
 
 # =============================================================================
@@ -192,8 +193,46 @@ MENU_ELLIPSIS: Final[str] = "\u2026"
 MSG_OPEN_LINK_INVALID: Final[str] = "Not a web or HTML link: {text}"
 MSG_OPEN_LINK_FAILED: Final[str] = "Could not open {url}"
 # Columns whose suggestions are the distinct values already present in that column.
-COLUMN_VALUE_COMPLETION_COLUMNS: Final[tuple[str, ...]] = ("Manufacturer 1",)
+COLUMN_VALUE_COMPLETION_COLUMNS: Final[tuple[str, ...]] = ("CreatedBy", "Manufacturer 1", "Vendor 1")
 COMPLETION_REFRESH_DELAY_MS: Final[int] = 0  # coalesce bursts of edits into one rebuild
+# Columns that suggest Altium parameter references ("=Value", "=Manufacturer 1 Part Number", ...).
+PARAMETER_REFERENCE_COMPLETION_COLUMNS: Final[tuple[str, ...]] = ("Comment",)
+PARAMETER_REFERENCE_PREFIX: Final[str] = "="
+
+# --- Repairing cells Excel corrupted -------------------------------------------------
+# Opening the CSV in Excel evaluates Altium parameter references such as "=Value" as
+# formulas, and saving it from Excel writes the result ("#NAME?") back. On load, cells
+# holding that error are restored to the reference: (column, Excel error, original value).
+EXCEL_ERROR_REPAIRS: Final[tuple[tuple[str, str, str], ...]] = (("Comment", "#NAME?", "=Value"),)
+MSG_EXCEL_REPAIRED: Final[str] = (
+    "Restored {count} {column} cell(s) that Excel had turned into '{error}' back to '{value}'.\n"
+    "Save the CSV to keep the fix, and avoid saving this file from Excel."
+)
+
+# --- Finding STEP models (local folder first, then online part-model sites) ------------
+STEP_MODELS_DIR: Final[str] = "../3D Models"
+STEP_FILE_SUFFIXES: Final[frozenset[str]] = frozenset({".step", ".stp"})
+STEP_MANUFACTURER_COLUMN: Final[str] = "Manufacturer 1"
+STEP_PART_NUMBER_COLUMN: Final[str] = "Manufacturer 1 Part Number"
+STEP_FOOTPRINT_COLUMN: Final[str] = "Footprint Ref"
+STEP_NAME_SEPARATOR: Final[str] = "_"  # "BOURNS_SRF2012": manufacturer prefix, then part name
+STEP_MIN_MATCH_CHARS: Final[int] = 4  # shorter names/part numbers match too much to be useful
+STEP_MAX_LOCAL_MATCHES: Final[int] = 15
+FIND_STEP_BUTTON_TEXT: Final[str] = "Find STEP File"
+FIND_STEP_BUTTON_TOOLTIP: Final[str] = (
+    "Look for a 3D model of Manufacturer 1 / Manufacturer 1 Part Number in {directory}, or search online"
+)
+MENU_STEP_LOCAL_HEADER: Final[str] = "Matches in {directory}:"
+MENU_STEP_NO_LOCAL: Final[str] = "No matching STEP file in {directory}"
+MENU_STEP_OPEN_FOLDER: Final[str] = "Open {directory} folder"
+MENU_STEP_SEARCH: Final[str] = "Search {site}"
+# (site, base URL, query parameter, query template)
+STEP_ONLINE_SEARCHES: Final[tuple[tuple[str, str, str, str], ...]] = (
+    ("SnapEDA", "https://www.snapeda.com/search/", "q", "{part}"),
+    ("Ultra Librarian", "https://app.ultralibrarian.com/search", "queryText", "{part}"),
+    ("Component Search Engine", "https://componentsearchengine.com/search", "term", "{part}"),
+    ("Google", "https://www.google.com/search", "q", '{manufacturer} "{part}" STEP 3D model'),
+)
 
 # --- CSV I/O (Apache Commons CSV CSVFormat.DEFAULT semantics) ---------------------
 CSV_ENCODING: Final[str] = "utf-8"  # Java 18+ FileReader/FileWriter default (JEP 400)
@@ -326,6 +365,49 @@ def menu_text(text: str) -> str:
 
 def elide(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[: max_chars - len(MENU_ELLIPSIS)] + MENU_ELLIPSIS
+
+
+def _match_key(text: str) -> str:
+    """Case-, accent- and punctuation-insensitive form: "Würth_SRF2012-501" -> "wurthsrf2012501"."""
+    return "".join(char for char in unicodedata.normalize("NFKD", text).casefold() if char.isalnum())
+
+
+def find_step_files(directory: Path, manufacturer: str, part_number: str, footprint: str) -> list[Path]:
+    """STEP files under ``directory`` that look like the model for a part, best first.
+
+    A file name containing the whole part number ranks highest, then one whose part
+    name (after the ``MANUFACTURER_`` prefix) is a prefix family of the part number
+    (``BOURNS_SRF2012`` for ``SRF2012-501YA``), then one named after the footprint.
+    Within a rank, files prefixed with the manufacturer's first word come first.
+    """
+    if not directory.is_dir():
+        return []
+    part = _match_key(part_number)
+    footprint_key = _match_key(footprint)
+    words = manufacturer.split()
+    maker = _match_key(words[0]) if words else ""
+    ranked: list[tuple[int, bool, str, Path]] = []
+    for entry in directory.rglob("*"):
+        if not entry.is_file() or entry.suffix.lower() not in STEP_FILE_SUFFIXES:
+            continue
+        stem = _match_key(entry.stem)
+        model = _match_key(entry.stem.split(STEP_NAME_SEPARATOR, 1)[-1])
+        if len(part) >= STEP_MIN_MATCH_CHARS and part in stem:
+            rank = 0
+        elif len(part) >= STEP_MIN_MATCH_CHARS and len(model) >= STEP_MIN_MATCH_CHARS and model in part:
+            rank = 1
+        elif footprint_key and footprint_key == stem:
+            rank = 2
+        else:
+            continue
+        maker_first = not (len(maker) >= STEP_MIN_MATCH_CHARS - 1 and stem.startswith(maker))
+        ranked.append((rank, maker_first, entry.name.casefold(), entry))
+    return [entry for *_key, entry in sorted(ranked)]
+
+
+def step_search_url(base: str, parameter: str, template: str, manufacturer: str, part_number: str) -> QUrl:
+    query = " ".join(template.format(manufacturer=manufacturer, part=part_number).split())
+    return QUrl(base + "?" + urllib.parse.urlencode({parameter: query}, quote_via=urllib.parse.quote))
 
 
 # =============================================================================
@@ -886,6 +968,14 @@ class FileNameCompletionSource(CompletionSource):
         return sorted(matches, key=lambda entry: entry.name.casefold())
 
 
+class StaticCompletionSource(CompletionSource):
+    """A fixed list of suggestions."""
+
+    def __init__(self, values: Iterable[str], parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._set_suggestions(set(values))
+
+
 class ColumnValuesCompletionSource(CompletionSource):
     """Suggests the distinct non-blank values already present in one table column
     (all rows, including ones hidden by the search). Rebuilt after loads, added rows
@@ -968,6 +1058,8 @@ class CsvGuiApp(QMainWindow):
         self._input_fields: list[QLineEdit] = [QLineEdit() for _ in self._column_names]
         self._add_button = QPushButton(ADD_ROW_BUTTON_TEXT)
         self._update_button = QPushButton(UPDATE_ROW_BUTTON_TEXT)
+        self._find_step_button = QPushButton(FIND_STEP_BUTTON_TEXT)
+        self._find_step_button.setToolTip(FIND_STEP_BUTTON_TOOLTIP.format(directory=STEP_MODELS_DIR))
         self._column_fitter: JTableColumnFitter | None = None
         # Input-field contents as last loaded from a row (or empty at startup); the
         # fields count as "modified" when they differ from this snapshot.
@@ -1016,6 +1108,7 @@ class CsvGuiApp(QMainWindow):
         self._search_field.textChanged.connect(self._on_search_text_changed)
         self._add_button.clicked.connect(self._on_add_row)
         self._update_button.clicked.connect(self._on_update_row)
+        self._find_step_button.clicked.connect(self._on_find_step_file)
 
     # --- construction -------------------------------------------------------------
     def _build_table(self) -> QTableView:
@@ -1046,6 +1139,11 @@ class CsvGuiApp(QMainWindow):
             if column_name in self._column_names:
                 column = self._column_names.index(column_name)
                 sources[column] = ColumnValuesCompletionSource(self._model, column, self)
+        for column_name in PARAMETER_REFERENCE_COMPLETION_COLUMNS:
+            if column_name in self._column_names:
+                column = self._column_names.index(column_name)
+                references = (PARAMETER_REFERENCE_PREFIX + name for name in self._column_names if name != column_name)
+                sources[column] = StaticCompletionSource(references, self)
         for column, source in sources.items():
             line_edit = self._input_fields[column]
             line_edit.setCompleter(source.create_completer(line_edit))
@@ -1094,6 +1192,7 @@ class CsvGuiApp(QMainWindow):
                 policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)  # equal-width cells like GridLayout
                 widget.setSizePolicy(policy)
                 input_panel.addWidget(widget, row, column)
+        input_panel.addWidget(self._find_step_button, len(cells), INPUT_LABEL_GRID_COLUMN, 1, 2)
         input_panel.setColumnStretch(INPUT_LABEL_GRID_COLUMN, INPUT_GRID_COLUMN_STRETCH)
         input_panel.setColumnStretch(INPUT_FIELD_GRID_COLUMN, INPUT_GRID_COLUMN_STRETCH)
 
@@ -1160,6 +1259,10 @@ class CsvGuiApp(QMainWindow):
     @edt_guard
     def _on_field_context_menu(self, column: int, position: QPoint) -> None:
         self.show_field_context_menu(column, position)
+
+    @edt_guard
+    def _on_find_step_file(self, *_signal_args: object) -> None:
+        self.find_step_file()
 
     # --- opening symbol / footprint files -------------------------------------------------
     def _reference_text(self, column: int) -> str:
@@ -1259,6 +1362,44 @@ class CsvGuiApp(QMainWindow):
         menu.exec(line_edit.mapToGlobal(position))
         menu.deleteLater()
 
+    # --- finding STEP models -----------------------------------------------------------------
+    def _column_text(self, column_name: str) -> str:
+        if column_name not in self._column_names:
+            return ""
+        return self._reference_text(self._column_names.index(column_name))
+
+    def find_step_file(self) -> None:
+        """Button: menu of local STEP files matching the part, then online model searches."""
+        manufacturer = self._column_text(STEP_MANUFACTURER_COLUMN)
+        part_number = self._column_text(STEP_PART_NUMBER_COLUMN)
+        if not part_number:
+            self._show_message(MSG_OPEN_EMPTY.format(column=STEP_PART_NUMBER_COLUMN))
+            return
+        directory = Path(STEP_MODELS_DIR)
+        matches = find_step_files(directory, manufacturer, part_number, self._column_text(STEP_FOOTPRINT_COLUMN))
+        button = self._find_step_button
+        menu = QMenu(button)
+        menu.setToolTipsVisible(True)
+        if matches:
+            menu.addAction(self._disabled_action(MENU_STEP_LOCAL_HEADER.format(directory=directory), menu))
+            for path in matches[:STEP_MAX_LOCAL_MATCHES]:
+                menu.addAction(self._open_file_action(path, menu))
+        else:
+            menu.addAction(self._disabled_action(MENU_STEP_NO_LOCAL.format(directory=directory), menu))
+        if directory.is_dir():
+            folder_action = QAction(menu_text(MENU_STEP_OPEN_FOLDER.format(directory=directory)), menu)
+            folder_action.triggered.connect(lambda _checked=False: self._open_file(directory))
+            menu.addAction(folder_action)
+        menu.addSeparator()
+        for site, base, parameter, template in STEP_ONLINE_SEARCHES:
+            url = step_search_url(base, parameter, template, manufacturer, part_number)
+            action = QAction(menu_text(MENU_STEP_SEARCH.format(site=site)), menu)
+            action.setToolTip(url.toDisplayString())
+            action.triggered.connect(lambda _checked=False, url=url: self._open_url(url))
+            menu.addAction(action)
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        menu.deleteLater()
+
     def _show_message(self, text: str) -> None:
         QMessageBox.information(self, MESSAGE_DIALOG_TITLE, text)
 
@@ -1329,6 +1470,7 @@ class CsvGuiApp(QMainWindow):
 
         self._model.clear()  # JAVA PARITY: cleared before parsing, so a failed load empties the table
         loaded: list[list[Cell]] = []
+        repairs: list[str] = []
         try:
             try:
                 with Path(path).open(encoding=CSV_ENCODING, errors=CSV_DECODE_ERRORS, newline="") as handle:
@@ -1344,6 +1486,7 @@ class CsvGuiApp(QMainWindow):
                             print(LOG_ROW_ERROR.format(record=record, error=row_error), file=sys.stderr)
             finally:
                 # Rows parsed before a failure stay in the table, as with Java's per-row addRow.
+                repairs = self._repair_excel_errors(loaded)
                 self._model.append_rows(loaded)
                 self._proxy.invalidate()
         except OSError as error:
@@ -1352,7 +1495,26 @@ class CsvGuiApp(QMainWindow):
         except Exception as error:  # noqa: BLE001 - mirrors Java's catch (Exception e)
             self._show_message(MSG_UNEXPECTED_ERROR.format(error=error))
             return False
+        for message in repairs:
+            self._show_message(message)
         return True
+
+    def _repair_excel_errors(self, rows: list[list[Cell]]) -> list[str]:
+        """FIX: restore cells Excel replaced with a formula error (see EXCEL_ERROR_REPAIRS).
+        Returns one message per repaired column."""
+        messages: list[str] = []
+        for column_name, error, value in EXCEL_ERROR_REPAIRS:
+            if column_name not in self._column_names:
+                continue
+            column = self._column_names.index(column_name)
+            count = 0
+            for row in rows:
+                if column < len(row) and row[column] == error:
+                    row[column] = value
+                    count += 1
+            if count:
+                messages.append(MSG_EXCEL_REPAIRED.format(count=count, column=column_name, error=error, value=value))
+        return messages
 
     def save_csv(self) -> None:
         path = self._current_file_name

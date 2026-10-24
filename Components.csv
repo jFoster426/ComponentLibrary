@@ -467,9 +467,9 @@ L78L05A(UMW),L78L05A(UMW),UMW_PKG_SOT-89-3,Judd Foster,https://www.lcsc.com/data
 "CONN,Hdr,2x8 Pin,1.27mm,SMD","CONN,Hdr,2x8 Pin,1.27mm,SMD",HANXIA_HX PZ1.27-2x8P TP,Judd Foster,https://www.lcsc.com/datasheet/C41376040.pdf?spm=wm.sxq.inf.ggs___wm.fly.bg.0.xh&lcsc_vid=T1ELXwUHQlNYVlZRE1JdXlRQFVgNBF1eTlFXBVxWRAAxVlNeQ1lYVlFUQlNXXjsOAxUeFF5JWBYZEEoKFBINSQcJGk4eFQsCAgIaSgADAwAHC0slRFhZUlVVQ08GEwkK,hanxia,HX PZ1.27-2x8P TP,LCSC,C41376040,CONN HEADER 16POS 1.27mm DUAL ROW SMD,,=Manufacturer 1 Part Number
 "CONN,Rcpt,2x8 Pin,1.27mm,SMD","CONN,Rcpt,2x8 Pin,1.27mm,SMD",HCTL_PM127-2-08-S-4.3,Judd Foster,https://www.lcsc.com/datasheet/C3975134.pdf?spm=wm.sxq.inf.ggs___wm.fly.bg.0.xh&lcsc_vid=T1ELXwUHQlNYVlZRE1JdXlRQFVgNBF1eTlFXBVxWRAAxVlNeQ1lYVldfR1VbXjsOAxUeFF5JWBYZEEoKFBINSQcJGk4dAgUUFAk%3D,HCTL,PM127-2-08-S-4.3,LCSC,C3975134,CONN SOCKET 16POS 1.27mm DUAL ROW SMD,,=Manufacturer 1 Part Number
 "CHOKE,CM,2LN,800nH,300mA","CHOKE,CM,2LN,800nH,300mA",BOURNS_SRF2012,Kevin Heyer,https://www.bourns.com/docs/Product-Datasheets/SRF2012A.pdf,Bourns,SRF2012-501YA,DigiKey,118-SRF2012-501YACT-ND,Choke CM 800nH 300mA,,"800nH,300mA"
-"",,,,,,,,,,,
-"",,,,,,,,,,,
-"",,,,,,,,,,,
+"Switch,Tactile,SPST-NO,RA,TH,TS36CA-0.6 250gf 031","Switch,Tactile,SPST-NO,RA,TH,TS36CA-0.6 250gf 031",SHOU_HAN_TS36CA-0.6 250gf 031,Kevin Heyer,https://www.lcsc.com/datasheet/C2906288.pdf,SHOU HAN,TS36CA-0.6 250gf 031,LCSC,C2906288,"Switch,Tactile,SPST-NO,RA,TH,TS36CA-0.6 250gf 031",TS36CA-0.6 250gf 031,"SPST-NO,RA,TH,TS36CA-0.6 250gf 031"
+"XTAL,8.0000MHz,OSC,50ppm,15pF,SMD","XTAL,8.0000MHz,OSC,50ppm,15pF,SMD",ECS_PKG_3225MV,Kevin Heyer,https://ecsxtal.com/store/pdf/ECS-3225MV.pdf,ECS Inc.,ECS-3225MV-080-BN-TR3,,,"XTAL,8.0000MHz,OSC,50ppm,15pF,SMD","8.0000MHz,50ppm,15pF,SMD","8.0000MHz,50ppm,15pF,SMD"
+"IC,MCU,QFN48,STM32G473CBU6","IC,MCU,QFN48,STM32G473CBU6",ST_PKG_UFQFN48_A0B9,Kevin Heyer,https://www.st.com/resource/en/datasheet/stm32g473cb.pdf,ST Microelectronics,STM32G473CBU6,,,IC MCU 32BIT 128KB FLSH 48UFQFPN,STM32G473CBU6,STM32G473CBU6
 "",,,,,,,,,,,
 "",,,,,,,,,,,
 "",,,,,,,,,,,
